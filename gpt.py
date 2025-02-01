@@ -1,17 +1,19 @@
-import requests
 import re
-from openai import OpenAI
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
-from aiogram.utils import executor
+import requests
 import asyncio
+
+from aiogram import Bot, Dispatcher, Router
+from aiogram.types import Message
+from oauth2client.service_account import ServiceAccountCredentials
+from openai import OpenAI
 
 # Telegram bot token
 TOKEN = "8148487118:AAHvC3XYnYClpJjRRyXqVHvL_vJrN5vfZ9o"
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
+
+router = Router()
 
 # Инициализация клиента DeepSeek
 client = OpenAI(
@@ -98,7 +100,7 @@ async def generate_ai_response(user_input, user_id):
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
-            temperature=0.7,
+            temperature=0.2,
             max_tokens=500,
             frequency_penalty=0.5
         )
@@ -122,7 +124,7 @@ def view_cart(user_id):
         return "Ваша корзина пуста."
 
 # Обработчик сообщений в боте
-@dp.message_handler()
+@router.message()
 async def handle_message(message: Message):
     user_input = message.text
     user_id = message.from_user.id
@@ -144,4 +146,12 @@ async def handle_message(message: Message):
 
 # Запуск бота
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    if __name__ == "__main__":
+        # Используем async функцию для запуска бота
+        async def main():
+            dp.include_router(router)
+            await dp.start_polling(bot, skip_updates=True)
+
+
+        # Запускаем бота с помощью asyncio.run
+        asyncio.run(main())
