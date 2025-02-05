@@ -1,157 +1,81 @@
-import re
-import gspread
 import requests
-import asyncio
 
-from aiogram import Bot, Dispatcher, Router
-from aiogram.types import Message
-from oauth2client.service_account import ServiceAccountCredentials
-from openai import OpenAI
+from datetime import datetime, timedelta
 
-# Telegram bot token
-TOKEN = "8148487118:AAHvC3XYnYClpJjRRyXqVHvL_vJrN5vfZ9o"
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
+from files import extract_doc_id, get_google_doc_text, load_products_from_sheet
+from config import SHEET_ID, WORKSHEET_NAME, DOC_URL, QWEN_API_KEY
+from settings import format_product_data, filter_relevant_messages, count_tokens
+from log import logger
 
-router = Router()
+# Словарь для хранения истории сообщений пользователей
+user_history = {}
 
-# Инициализация клиента DeepSeek
-client = OpenAI(
-    api_key="sk-2c72d7110b7141dda676ec6ea7e42b73",
-    base_url="https://api.deepseek.com/v1"
-)
-
-# Настройка доступа к Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client_sheets = gspread.authorize(creds)
-
-# Фиксированная ссылка на документ
-DOC_URL = "https://docs.google.com/document/d/1dg8CKU1w5StO9KbiOM-mwmv7AokRx-KTydIBFOxkTv4/edit?usp=sharing"
-SHEET_ID = "1gYhoyLtuBy7cVzwGibn2ZrA4k8WiCOtct744BinNWnw"
-WORKSHEET_NAME = "Лист1"
-
-# Словарь для корзины пользователей
-user_cart = {}
-
-# Функция для загрузки содержимого Google Doc
-def get_google_doc_text(doc_id):
-    url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.text
-    else:
-        raise Exception(f"Не удалось загрузить документ: {response.status_code}")
-
-# Извлекаем ID документа
-def extract_doc_id(url_or_id):
-    match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_or_id)
-    return match.group(1) if match else url_or_id
-
-# Загружаем товары из Google Sheets
-def load_products_from_sheet(sheet_id, worksheet_name):
-    sheet = client_sheets.open_by_key(sheet_id).worksheet(worksheet_name)
-    return sheet.get_all_records()
-
-# Форматируем данные о товарах
-def format_product_data(products):
-    formatted_data = []
-    current_category, current_subcategory = None, None
-    for product in products:
-        try:
-            category = product['Категория']
-            subcategory = product['Подкатегория']
-            name = product['Название товара']
-            price = product['Цена']
-
-            if category != current_category:
-                current_category = category
-                formatted_data.append(f"# {current_category}")
-
-            if subcategory != current_subcategory:
-                current_subcategory = subcategory
-                formatted_data.append(f"## {subcategory} - {price} р")
-
-            formatted_data.append(f"### {name}")
-
-        except KeyError as e:
-            print(f"Ошибка данных: {e}")
-            continue
-
-    return "\n".join(formatted_data)
-
-# Генерируем ответ с ИИ
+# Генерируем ответ с помощью HTTP API Qwen
 async def generate_ai_response(user_input, user_id):
+    """
+        Генерирует ответ с использованием API Qwen на основе ввода пользователя.
+
+        :param user_input: Ввод пользователя.
+        :param user_id: Идентификатор пользователя.
+        :return: Кортеж с ответом, количеством входных и выходных токенов.
+        :raises Exception: Если возникает ошибка при запросе к API.
+        """
     try:
-        # Загружаем промпт
+        logger.info(f"Генерация ответа Qwen для пользователя {user_id}.")
         doc_id = extract_doc_id(DOC_URL)
         system_prompt = get_google_doc_text(doc_id)
-
-        # Загружаем товары
         products = load_products_from_sheet(SHEET_ID, WORKSHEET_NAME)
         product_info = format_product_data(products)
-
         if product_info.strip():
             system_prompt += f"\n\nСписок товаров:\n{product_info}"
 
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_input}]
+        history = user_history.get(user_id, [])
+        filtered_history = filter_relevant_messages(history, user_id)
 
-        # Запрос к модели
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=500,
-            frequency_penalty=0.5
-        )
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in filtered_history:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": user_input})
 
-        return response.choices[0].message.content
+        # Подсчет входных токенов
+        input_tokens = sum(count_tokens(msg["content"]) for msg in messages)
+        logger.info(f"Входные токены: {input_tokens}")
+
+        # Отправляем запрос к HTTP API Qwen
+        url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {QWEN_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "qwen-turbo",
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 500,
+            "frequency_penalty": 0.5
+        }
+        response = requests.post(url, json=data, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            result = response.json()
+            assistant_content = result["choices"][0]["message"]["content"]
+
+            # Подсчет выходных токенов
+            output_tokens = count_tokens(assistant_content)
+            logger.info(f"Выходные токены: {output_tokens}")
+
+            current_time = datetime.now()
+            user_history.setdefault(user_id, []).append(
+                {"role": "user", "content": user_input, "timestamp": current_time}
+            )
+            user_history[user_id].append(
+                {"role": "assistant", "content": assistant_content, "timestamp": current_time}
+            )
+            logger.info("Ответ Qwen успешно сгенерирован.")
+            return assistant_content, input_tokens, output_tokens
+        else:
+            logger.error(f"Ошибка API Qwen: {response.status_code}, {response.text}")
+            return f"Ошибка API: {response.status_code}", 0, 0
     except Exception as e:
-        return f"Ошибка: {str(e)}"
-
-# Добавление товара в корзину
-def add_to_cart(user_id, product_name):
-    if user_id not in user_cart:
-        user_cart[user_id] = []
-    user_cart[user_id].append(product_name)
-
-# Показ корзины
-def view_cart(user_id):
-    if user_id in user_cart and user_cart[user_id]:
-        cart_items = "\n".join(user_cart[user_id])
-        return f"В вашей корзине:\n{cart_items}"
-    else:
-        return "Ваша корзина пуста."
-
-# Обработчик сообщений в боте
-@router.message()
-async def handle_message(message: Message):
-    user_input = message.text
-    user_id = message.from_user.id
-
-    # Проверка на команду /корзина
-    if user_input.lower() == "/корзина":
-        cart_response = view_cart(user_id)
-        await message.answer(cart_response)
-    else:
-        # Добавление товара в корзину, если он выбран
-        if "купить" in user_input.lower():
-            product_name = user_input.split("купить")[-1].strip()  # Получаем название товара
-            add_to_cart(user_id, product_name)
-            await message.answer(f"Товар {product_name} добавлен в вашу корзину.")
-
-        # Генерация ответа от ИИ
-        response = await generate_ai_response(user_input, user_id)
-        await message.answer(response)
-
-# Запуск бота
-if __name__ == "__main__":
-    if __name__ == "__main__":
-        # Используем async функцию для запуска бота
-        async def main():
-            dp.include_router(router)
-            await dp.start_polling(bot, skip_updates=True)
-
-
-        # Запускаем бота с помощью asyncio.run
-        asyncio.run(main())
+        logger.error(f"Ошибка при генерации ответа Qwen: {e}")
+        return f"Ошибка: {str(e)}", 0, 0
