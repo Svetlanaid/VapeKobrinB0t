@@ -5,40 +5,67 @@ from datetime import datetime, timedelta
 from log import logger
 from config import NEW_DIALOG_TIMEOUT, MAX_HISTORY_MESSAGES
 
-
-# Форматируем данные о товарах
 def format_product_data(products):
     """
-        Форматирует данные о товарах для вывода.
+            Форматирует данные о товарах для вывода.
 
-        :param products: Список товаров в виде словарей.
-        :return: Строка с форматированными данными о товарах.
-        """
+            :param products: Список товаров в виде словарей.
+            :return: Строка с форматированными данными о товарах.
+            """
     try:
         logger.info("Форматирование данных о товарах.")
         formatted_data = []
         current_category, current_subcategory = None, None
+
         for product in products:
             try:
                 category = product['Категория']
                 subcategory = product['Подкатегория']
-                name = product['Название товара']
+                flavors = product.get('Вкусы', '').strip()
+                colors = product.get('Цвета', '').strip()
                 price = product['Цена']
+                image_url = product.get('URL Изображения', '')
+
+                # Разделяем вкусы и цвета по ";"
+                flavors_list = [flavor.strip() for flavor in flavors.split(";") if flavor.strip()]
+                colors_list = [color.strip() for color in colors.split(";") if color.strip()]
+
                 if category != current_category:
                     current_category = category
                     formatted_data.append(f"# {current_category}")
+
                 if subcategory != current_subcategory:
                     current_subcategory = subcategory
-                    formatted_data.append(f"## {subcategory} - {price} р")
-                formatted_data.append(f"### {name}")
+                    formatted_data.append(f"- {subcategory} - {price} р")
+
+                # Добавляем вкусы или цвета
+                if flavors_list or colors_list:
+                    if flavors_list and colors_list:
+                        formatted_data.append(
+                            f"  {subcategory} содержит:\n"
+                            f"  - Вкусы: {', '.join(flavors_list)}\n"
+                            f"  - Цвета: {', '.join(colors_list)}"
+                        )
+                    elif flavors_list:
+                        formatted_data.extend([f"  - {flavor}" for flavor in flavors_list])
+                    elif colors_list:
+                        formatted_data.extend([f"  - {color}" for color in colors_list])
+
+                # Добавляем команду для изображения
+                if image_url:
+                    formatted_data.append(f"SEND_IMAGE: \"{image_url}\"")
+
             except KeyError as e:
                 logger.error(f"Ошибка данных в товаре: {e}")
                 continue
+
         logger.info("Форматирование данных завершено.")
         return "\n".join(formatted_data)
+
     except Exception as e:
         logger.error(f"Ошибка при форматировании данных: {e}")
         return ""
+
 
 
 # Очистка сообщений старше суток и фильтрация актуальной истории

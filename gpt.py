@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timedelta
 
 from files import extract_doc_id, get_google_doc_text, load_products_from_sheet
-from config import SHEET_ID, WORKSHEET_NAME, DOC_URL, QWEN_API_KEY
+from config import SHEET_ID, WORKSHEET_NAME, DOC_URL, QWEN_API_KEY, NEW_URL
 from settings import format_product_data, filter_relevant_messages, count_tokens
 from log import logger
 
@@ -42,7 +42,7 @@ async def generate_ai_response(user_input, user_id):
         logger.info(f"Входные токены: {input_tokens}")
 
         # Отправляем запрос к HTTP API Qwen
-        url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+        url = NEW_URL
         headers = {
             "Authorization": f"Bearer {QWEN_API_KEY}",
             "Content-Type": "application/json"
@@ -79,3 +79,4 @@ async def generate_ai_response(user_input, user_id):
     except Exception as e:
         logger.error(f"Ошибка при генерации ответа Qwen: {e}")
         return f"Ошибка: {str(e)}", 0, 0
+
